@@ -1,0 +1,412 @@
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ───────────────────────────── ENUMS ─────────────────────────────
+
+enum Role {
+  USER
+  ADMIN
+
+  @@map("role")
+}
+
+enum EventType {
+  EVENT    // подія
+  DEADLINE // дедлайн
+  EXAM     // іспит
+
+  @@map("event_type")
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+
+  @@map("task_priority")
+}
+
+enum TaskStatus {
+  TODO
+  DONE
+
+  @@map("task_status")
+}
+
+enum SessionType {
+  WORK
+  BREAK
+
+  @@map("session_type")
+}
+
+enum ReminderRelatedType {
+  DEADLINE_TASK
+  DEADLINE_EVENT
+  DECK_SHARE
+  NOTE_SHARE
+
+  @@map("reminder_related_type")
+}
+
+enum ReminderChannel {
+  EMAIL
+  PUSH
+  BOTH
+
+  @@map("reminder_channel")
+}
+
+enum ReminderStatus {
+  PENDING
+  SENT
+  FAILED
+
+  @@map("reminder_status")
+}
+
+enum LabStatus {
+  IN_PROGRESS
+  SUBMITTED
+
+  @@map("lab_status")
+}
+
+enum CardStatus {
+  NEW
+  KNOWN
+  REPEAT
+
+  @@map("card_status")
+}
+
+// ───────────────────────────── USERS & DEVICES ─────────────────────────────
+
+model User {
+  id              String   @id @default(uuid()) @map("user_id") @db.Uuid
+  fullName        String   @map("full_name")
+  email           String   @unique
+  passwordHash    String   @map("password_hash")
+  role            Role     @default(USER)
+  twoFaEnabled    Boolean  @default(false) @map("two_fa_enabled")
+  twoFaSecret     String?  @map("two_fa_secret")
+  themePreference String?  @map("theme_preference")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  devices             Device[]
+  events              Event[]
+  tasks               Task[]
+  pomodoroSessions    PomodoroSession[]
+  reminders           Reminder[]
+  activityLogsAsOwner ActivityLog[]     @relation("ActivityLogOwner")
+  activityLogsAsActor ActivityLog[]     @relation("ActivityLogActor")
+  notes               Note[]
+  noteSharesGiven     NoteShare[]       @relation("NoteShareSharer")
+  noteSharesReceived  NoteShare[]       @relation("NoteShareRecipient")
+  uploadedFiles       File[]
+  subjects            Subject[]
+  labWorks            LabWork[]
+  flashcardDecks      FlashcardDeck[]
+  deckSharesGiven     DeckShare[]       @relation("DeckShareSharer")
+  deckSharesReceived  DeckShare[]       @relation("DeckShareRecipient")
+
+  @@map("users")
+}
+
+model Device {
+  id               String    @id @default(uuid()) @map("device_id") @db.Uuid
+  userId           String    @map("user_id") @db.Uuid
+  deviceName       String    @map("device_name")
+  platform         String
+  pushSubscription String?   @map("push_subscription")
+  lastSyncedAt     DateTime? @map("last_synced_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("devices")
+}
+
+// ───────────────────────────── EVENTS, TASKS, POMODORO ─────────────────────────────
+
+model Event {
+  id        String    @id @default(uuid()) @map("event_id") @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  title     String
+  eventDate DateTime  @map("event_date") @db.Date
+  startTime DateTime  @map("start_time") @db.Time(6)
+  endTime   DateTime  @map("end_time") @db.Time(6)
+  location  String?
+  eventType EventType @map("event_type") // на ERD поле підписане "time", примітка: подія/дедлайн/іспит
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("events")
+}
+
+model Task {
+  id          String       @id @default(uuid()) @map("task_id") @db.Uuid
+  userId      String       @map("user_id") @db.Uuid
+  title       String
+  description String?
+  deadline    DateTime?    @db.Date
+  priority    TaskPriority @default(MEDIUM)
+  status      TaskStatus   @default(TODO)
+  createdAt   DateTime     @default(now()) @map("created_at")
+
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pomodoroSessions PomodoroSession[]
+
+  @@map("tasks")
+}
+
+model PomodoroSession {
+  id              String      @id @default(uuid()) @map("session_id") @db.Uuid
+  userId          String      @map("user_id") @db.Uuid
+  taskId          String?     @map("task_id") @db.Uuid
+  sessionType     SessionType @map("session_type")
+  durationMinutes Int         @map("duration_minutes")
+  startedAt       DateTime    @map("started_at")
+  completed       Boolean     @default(false)
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task Task? @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@map("pomodoro_sessions")
+}
+
+// ───────────────────────────── REMINDERS & ACTIVITY LOG ─────────────────────────────
+
+model Reminder {
+  id          String              @id @default(uuid()) @map("reminder_id") @db.Uuid
+  userId      String              @map("user_id") @db.Uuid
+  relatedType ReminderRelatedType @map("related_type")
+  // Поліморфне посилання: вказує на task / event / deck_share / note_share
+  // залежно від relatedType, тому без зовнішнього ключа
+  relatedId   String              @map("related_id") @db.Uuid
+  remindAt    DateTime            @map("remind_at")
+  channel     ReminderChannel
+  status      ReminderStatus      @default(PENDING)
+  isSeen      Boolean             @default(false) @map("is_seen")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("reminders")
+}
+
+model ActivityLog {
+  id         String   @id @default(uuid()) @map("log_id") @db.Uuid
+  ownerId    String   @map("owner_id") @db.Uuid // "стосується"
+  actorId    String   @map("actor_id") @db.Uuid // "виконав"
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  owner User @relation("ActivityLogOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  actor User @relation("ActivityLogActor", fields: [actorId], references: [id], onDelete: Cascade)
+
+  @@map("activity_log")
+}
+
+// ───────────────────────────── NOTES, TAGS, SHARES, ATTACHMENTS ─────────────────────────────
+
+model Note {
+  id        String   @id @default(uuid()) @map("note_id") @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  title     String
+  content   String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tags        Tag[]        @relation("NoteTags") // many-to-many (неявна зв'язна таблиця _NoteTags)
+  shares      NoteShare[]
+  attachments Attachment[]
+
+  @@map("notes")
+}
+
+model Tag {
+  id   String @id @default(uuid()) @map("tag_id") @db.Uuid
+  name String @unique
+
+  notes Note[] @relation("NoteTags")
+
+  @@map("tags")
+}
+
+model NoteShare {
+  id               String   @id @default(uuid()) @map("share_id") @db.Uuid
+  noteId           String   @map("note_id") @db.Uuid
+  userId           String   @map("user_id") @db.Uuid // "поділився"
+  sharedWithUserId String   @map("shared_with_user_id") @db.Uuid // "отримав"
+  sharedAt         DateTime @default(now()) @map("shared_at")
+  isSeen           Boolean  @default(false) @map("is_seen")
+
+  note       Note @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  user       User @relation("NoteShareSharer", fields: [userId], references: [id], onDelete: Cascade)
+  sharedWith User @relation("NoteShareRecipient", fields: [sharedWithUserId], references: [id], onDelete: Cascade)
+
+  @@map("note_shares")
+}
+
+model Attachment {
+  id         String    @id @default(uuid()) @map("attachment_id") @db.Uuid
+  noteId     String    @map("note_id") @db.Uuid
+  fileId     String    @map("file_id") @db.Uuid
+  uploadedAt DateTime  @default(now()) @map("uploaded_at")
+  deletedAt  DateTime? @map("deleted_at")
+
+  note Note @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  file File @relation(fields: [fileId], references: [id], onDelete: Restrict)
+
+  @@map("attachments")
+}
+
+// ───────────────────────────── FILES ─────────────────────────────
+
+model File {
+  id            String    @id @default(uuid()) @map("file_id") @db.Uuid
+  storageKey    String    @unique @map("storage_key")
+  fileName      String    @map("file_name")
+  bucket        String
+  contentType   String    @map("content_type")
+  fileSizeBytes Int       @map("file_size_bytes")
+  checksum      String
+  uploadedBy    String    @map("uploaded_by") @db.Uuid
+  uploadedAt    DateTime  @default(now()) @map("uploaded_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+  deletedAt     DateTime? @map("deleted_at")
+
+  uploader      User           @relation(fields: [uploadedBy], references: [id], onDelete: Restrict)
+  attachments   Attachment[]
+  labVersions   LabVersion[]
+  examMaterials ExamMaterial[]
+
+  @@map("files")
+}
+
+// ───────────────────────────── SUBJECTS, SCHEDULE, LABS, EXAMS ─────────────────────────────
+
+model Subject {
+  id       String  @id @default(uuid()) @map("subject_id") @db.Uuid
+  userId   String  @map("user_id") @db.Uuid
+  name     String
+  teacher  String?
+  colorTag String? @map("color_tag")
+
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scheduleItems  ScheduleItem[]
+  labWorks       LabWork[]
+  flashcardDecks FlashcardDeck[]
+  examMaterials  ExamMaterial[]
+
+  @@map("subjects")
+}
+
+model ScheduleItem {
+  id        String   @id @default(uuid()) @map("schedule_id") @db.Uuid
+  subjectId String   @map("subject_id") @db.Uuid
+  dayOfWeek String   @map("day_of_week")
+  startTime DateTime @map("start_time") @db.Time(6)
+  endTime   DateTime @map("end_time") @db.Time(6)
+  room      String?
+
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  @@map("schedule_items")
+}
+
+model LabWork {
+  id        String    @id @default(uuid()) @map("lab_id") @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  subjectId String    @map("subject_id") @db.Uuid
+  title     String
+  deadline  DateTime? @db.Date
+  status    LabStatus @default(IN_PROGRESS)
+
+  user     User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject  Subject      @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  versions LabVersion[]
+
+  @@map("lab_works")
+}
+
+model LabVersion {
+  id            String    @id @default(uuid()) @map("version_id") @db.Uuid
+  labId         String    @map("lab_id") @db.Uuid
+  fileId        String    @map("file_id") @db.Uuid
+  versionNumber Int       @map("version_number")
+  isCurrent     Boolean   @default(false) @map("is_current")
+  uploadedAt    DateTime  @default(now()) @map("uploaded_at")
+  deletedAt     DateTime? @map("deleted_at")
+
+  lab  LabWork @relation(fields: [labId], references: [id], onDelete: Cascade)
+  file File    @relation(fields: [fileId], references: [id], onDelete: Restrict)
+
+  @@map("lab_versions")
+}
+
+model ExamMaterial {
+  id        String @id @default(uuid()) @map("material_id") @db.Uuid
+  subjectId String @map("subject_id") @db.Uuid
+  fileId    String @map("file_id") @db.Uuid
+
+  subject Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  file    File    @relation(fields: [fileId], references: [id], onDelete: Restrict)
+
+  @@map("exam_materials")
+}
+
+// ───────────────────────────── FLASHCARDS ─────────────────────────────
+
+model FlashcardDeck {
+  id        String  @id @default(uuid()) @map("deck_id") @db.Uuid
+  userId    String  @map("user_id") @db.Uuid
+  subjectId String  @map("subject_id") @db.Uuid
+  title     String
+  isShared  Boolean @default(false) @map("is_shared")
+
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject   Subject     @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  flashcards Flashcard[]
+  shares    DeckShare[]
+
+  @@map("flashcard_decks")
+}
+
+model Flashcard {
+  id           String     @id @default(uuid()) @map("card_id") @db.Uuid
+  deckId       String     @map("deck_id") @db.Uuid
+  question     String
+  answer       String
+  status       CardStatus @default(NEW)
+  lastReviewed DateTime?  @map("last_reviewed")
+
+  deck FlashcardDeck @relation(fields: [deckId], references: [id], onDelete: Cascade)
+
+  @@map("flashcards")
+}
+
+model DeckShare {
+  id               String   @id @default(uuid()) @map("share_id") @db.Uuid
+  deckId           String   @map("deck_id") @db.Uuid
+  userId           String   @map("user_id") @db.Uuid
+  sharedWithUserId String   @map("shared_with_user_id") @db.Uuid
+  sharedAt         DateTime @default(now()) @map("shared_at")
+  isSeen           Boolean  @default(false) @map("is_seen")
+
+  deck       FlashcardDeck @relation(fields: [deckId], references: [id], onDelete: Cascade)
+  user       User          @relation("DeckShareSharer", fields: [userId], references: [id], onDelete: Cascade)
+  sharedWith User          @relation("DeckShareRecipient", fields: [sharedWithUserId], references: [id], onDelete: Cascade)
+
+  @@map("deck_shares")
+}
