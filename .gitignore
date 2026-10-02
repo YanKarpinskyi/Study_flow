@@ -1,0 +1,16 @@
+# Секретні змінні
+.env
+*.env.local
+
+# Залежності
+node_modules/
+
+# Збірники та логи
+dist/
+build/
+*.log
+
+# Кеш та системні файли
+.DS_Store
+.vscode/
+.idea/
